@@ -5,58 +5,55 @@ import com.examly.springapp.model.CampaignStatus;
 import com.examly.springapp.model.Donation;
 import com.examly.springapp.repository.CampaignRepository;
 import com.examly.springapp.repository.DonationRepository;
+import jakarta.persistence.EntityNotFoundException;
+import jakarta.validation.ValidationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 
 @Service
 public class DonationService {
 
     private final DonationRepository donationRepository;
     private final CampaignRepository campaignRepository;
+    private final CampaignService campaignService;
 
-    public DonationService(DonationRepository donationRepository, CampaignRepository campaignRepository) {
+    @Autowired
+    public DonationService(DonationRepository donationRepository,
+                           CampaignRepository campaignRepository,
+                           CampaignService campaignService) {
         this.donationRepository = donationRepository;
         this.campaignRepository = campaignRepository;
+        this.campaignService = campaignService;
     }
 
-    public Optional<Donation> donateToCampaign(Long campaignId, Donation donation) {
-        Optional<Campaign> optionalCampaign = campaignRepository.findById(campaignId);
+    public Donation makeDonation(Long campaignId, Donation donation) {
+        Campaign campaign = campaignRepository.findById(campaignId)
+                .orElseThrow(() -> new EntityNotFoundException("Campaign not found"));
 
-        if (optionalCampaign.isEmpty()) {
-            return Optional.empty();
+        if (campaign.getStatus() != CampaignStatus.ACTIVE) {
+            throw new ValidationException("Cannot donate. Campaign is not ACTIVE.");
         }
 
-        Campaign campaign = optionalCampaign.get();
+        // Update the campaign’s current amount
+        BigDecimal updatedAmount = campaign.getCurrentAmount().add(donation.getAmount());
+        campaign.setCurrentAmount(updatedAmount);
 
-        // Only allow donation if campaign is ACTIVE and not expired
-        if (campaign.getStatus() != CampaignStatus.ACTIVE || campaign.getDeadline().isBefore(LocalDate.now())) {
-            return Optional.empty();
-        }
-
-        // Set campaign to donation
+        // Save donation
         donation.setCampaign(campaign);
         Donation savedDonation = donationRepository.save(donation);
 
-        // Auto-update campaign status if goal reached
-        BigDecimal total = donationRepository.findByCampaignId(campaignId)
-                .stream()
-                .map(Donation::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        if (total.compareTo(campaign.getGoalAmount()) >= 0) {
-            campaign.setStatus(CampaignStatus.COMPLETED);
-            campaignRepository.save(campaign);
-        }
-
-        return Optional.of(savedDonation);
+        // Update status if needed
+        campaignService.updateCampaignStatusBasedOnFunding(campaign);
+        return savedDonation;
     }
 
-    public List<Donation> getDonationsByCampaign(Long campaignId) {
+    public List<Donation> getDonationsForCampaign(Long campaignId) {
+        if (!campaignRepository.existsById(campaignId)) {
+            throw new EntityNotFoundException("Campaign with ID " + campaignId + " not found");
+        }
         return donationRepository.findByCampaignId(campaignId);
     }
 }
-!

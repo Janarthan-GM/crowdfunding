@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # Create unique database name from request ID
